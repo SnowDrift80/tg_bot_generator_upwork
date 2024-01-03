@@ -134,27 +134,37 @@ async def create_scaffold(update: Update, context: ContextTypes.DEFAULT_TYPE, as
         print(line)
         if line.strip().startswith(('1.', '2.', '3.', '4.', '5.', '6.', '7.', '8.', '9.', 
                                    '10.', '11.', '12.', '13.', '14.', '15.', '16.', '17.', 
-                                   '18.', '19.', '20.', '20.', '21.', '22.', '23.', '24.',
+                                   '18.', '19.', '20.', '21.', '22.', '23.', '24.',
                                    '25.', '26.', '27.', '28.', '29.', '30.')):
             list_of_lines.append(line)
         
     gen_doc = ""
     
     language = "English"
+    subchapter_pattern = re.compile(r'^(\d+\.\d+) ([^\d].*)$')
+    all_chapters = '\n'.join([line + '\n' for line in list_of_lines])
         
     for line in list_of_lines:
+        
+        # check if it is a sub-chapter, if no, then just add
+        # the line (chapter title) and continue with next line
+        if not subchapter_pattern.match(line): 
+            gen_doc += "\n\n" + line +"\n"
+            continue
+            
         prompt = f"""
         Your role: You are a generative artificial intelligence. Your speciality is to generate academic essays and lectures.
         Your task: You will be given a topic and a chapter title. Your task is to generate the text for the title in context of the title and the topic.
         Knowledge: You will use your general knowledge that was given to you by your training. If there is a document attached, you will use this knowledge too and if not attached you will use your general knowledge.
         Comments: You strictly adhere to deliver content only. You never comment your content or lack thereof. You will never mention that you don't know something and you will never apologize.
         Content: You will create content only for sub-chapters. In case of parent chapters, you will just return the parent chapter title and you will refrain from adding further content.
-        Length: the content you create for sub-chapters should be at minimum 800 Bytes and a maximum of 2 kilobyte in length.
+        Length: the content you create for sub-chapters should be at minimum 400 Bytes and a maximum of 500 bytes in length.
         Language: You will generate your response in {language} language.
         Style: Your audience is consisting of high-profile scholars and academics, therefore choose expressions and language style accordingly.
         Purpose: The purpose of this task is to generate the content for the present sub-chapter.
-        Topic: {instruction_text}
-        Chapter title: {line}
+        Topic in context to each chapter: {instruction_text}
+        List of all chapters and sub-chapters belonging to this document for your reference: {all_chapters}
+        Active chapter that you are asked to generate now: {line}
         """
         message = OPENAI_CLIENT.beta.threads.messages.create(
             thread_id=oai_thread_id,
