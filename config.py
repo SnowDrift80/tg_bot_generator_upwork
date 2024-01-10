@@ -15,3 +15,21 @@ class BOT_CONSTANTS:
         "bot",
     ]
     VERBOSE = True
+    
+    DOCUMENT_TYPES = [
+        {
+            'name': 'academic_lecture',
+            'display_name': 'Academic Lecture',
+            'description': 'Create an academic lecture',
+            'class_path': 'documentdrivers.academic.LectureDriver',
+            'method': 'create_lecture'
+        },
+        {
+            'name': 'poetry',
+            'display_name': 'Poetry',
+            'description': 'Compose a poem',
+            'class_path': 'documentdrivers.poetry.PoetryDriver',
+            'method': 'create_poem'
+        },
+        # Add more types with class_path and method
+    ]

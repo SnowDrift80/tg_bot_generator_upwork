@@ -1,2 +1,4 @@
 botvenv/
 __pycache__/
+old/
+documentdrivers/__pycache__
