@@ -1,7 +1,5 @@
 import asyncio
-import re
 import sys
-from docx import Document
 from openai import OpenAI, NotFoundError
 from telegram import Update # new
 from telegram.ext import (
