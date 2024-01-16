@@ -22,14 +22,22 @@ class BOT_CONSTANTS:
             'display_name': 'Academic Lecture',
             'description': 'Create an academic lecture',
             'class_path': 'documentdrivers.academic.LectureDriver',
-            'method': 'create_lecture'
         },
         {
             'name': 'poetry',
             'display_name': 'Poetry',
             'description': 'Compose a poem',
             'class_path': 'documentdrivers.poetry.PoetryDriver',
-            'method': 'create_poem'
         },
         # Add more types with class_path and method
     ]
+
+    # CONCURRENCY: max. number of concurrent document generation tasks
+    # 0 = unlimited concurrent tasks
+    # 1 = max 1 task at a time 
+    # 2 = max 2 tasks at a time etc.
+    CONCURRENCY = 1
+    
+    # logging levels:
+    # 'CRITICAL', 'ERROR', 'WARNING', 'INFO', 'DEBUG' and 'NOTSET'
+    LOGGING_LEVEL = 'ERROR'

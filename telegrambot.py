@@ -10,16 +10,27 @@ from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     ContextTypes,
-    CallbackContext
+    CallbackContext,
 ) 
 
 from utils import SharedUtils
-
+from document_driver_base import DocumentDriverBase
+import logging
 
 
 
 # Initialize OpenAI client
 OPENAI_CLIENT = OpenAI(api_key=BC.OPENAI_API_KEY)
+# dynamic attribute method lookup for logging level based on config.py entry
+log_level = getattr(logging, BC.LOGGING_LEVEL.upper(), None)
+logging.basicConfig(level=log_level)
+
+
+class TelegramThread:
+    def __init__(self, tg_thread_id, document_name, document_object):
+        self.tg_thread_id = tg_thread_id
+        self.document_name = document_name
+        self.document_object = document_object
   
 
 class TelegramBot:
@@ -27,6 +38,7 @@ class TelegramBot:
         self.oai_tg_id_mapper = {}
         self.bot_msg_id_list = []
         self.user_state = {}
+        self.tg_thread_to_document_mapper = {}
         
         try:
             self.openai = OPENAI_CLIENT
@@ -39,18 +51,17 @@ class TelegramBot:
         self.application = ApplicationBuilder().token(BC.TG_BOT_TOKEN).build()
         
         create_handler = CommandHandler(
-            'create', self.create
+            'create', self.create_async
             )
         
         echo_handler = MessageHandler(
             filters.TEXT & (~filters.COMMAND), 
-            lambda update, context: self.echo(update, context),
+            lambda update, context: self.echo_async(update, context),
             )
         
         for document_type in BC.DOCUMENT_TYPES:
             document_name = document_type['display_name']
             document_class_path = document_type['class_path']
-            document_method = document_type['method']
             
             handler = MessageHandler(
                 filters.Regex(fr'^{document_name}$'),
@@ -62,7 +73,35 @@ class TelegramBot:
         
         self.application.add_handler(create_handler)
         self.application.add_handler(echo_handler)
-        
+
+    # asynchronous function wrapper for create() method (command: /create)    
+    async def create_async(self, update: Update, context: CallbackContext):
+        if len(self.tg_thread_to_document_mapper) > 0:
+            threads_to_delete = []
+            for thread_id, thread in self.tg_thread_to_document_mapper.items():
+                if thread.document_object.is_complete():
+                    threads_to_delete.append(thread_id)
+            for thread_id in threads_to_delete:
+                print(f"create_async: removed an inactive task #{thread_id} from dictionary")
+                del self.tg_thread_to_document_mapper[thread_id]
+        # we want to check if we have reached the maximum of allowed concurrent tasks
+        # if BC.CONCURRENCY is 0, then there is no limit to the number of concurrent tasks
+        if BC.CONCURRENCY >= 1:
+            if len(self.tg_thread_to_document_mapper) >= BC.CONCURRENCY:
+                print("Too many tasks - wait until running tasks finish.")
+                await context.bot.send_message(
+                    chat_id=update.effective_chat.id,
+                    text=f"<b>Max allowed tasks is {BC.CONCURRENCY}.</b>\nCurrently {len(self.tg_thread_to_document_mapper)} task(s) active.\n\nRequest rejected.",
+                    parse_mode='html'
+                )
+                return
+        asyncio.create_task(self.create(update, context))
+
+
+    # asynchronous function wrapper for echo() method
+    # The echo function is the default function to process user messages (chat)
+    async def echo_async(self, update: Update, context: CallbackContext):
+        asyncio.create_task(self.echo(update, context))
 
     # instructions handler
     # user decided to enter instructions. user_status flag is set to 'instructions'
@@ -73,19 +112,19 @@ class TelegramBot:
             text="Please enter your instructions:"
         )
         self.set_user_status(update.effective_chat.id, document_name)
-        print("user_state: ", self.user_state) if BC.VERBOSE else None
 
     
         
     # Telegram create document menu
     # allows user to chose type of document to be created
     async def create(self, update: Update, context: CallbackContext) -> None:
+        tg_thread_id = update.effective_chat.id
         document_types = BC.DOCUMENT_TYPES
         
-        #Convert document types to a list o lists for ReplyKeyboardMarkup
+        #Convert document types from config.py to a list o lists for ReplyKeyboardMarkup
         keyboard_options = [[doc['display_name']] for doc in document_types]
         keyboard_options.append(['cancel']) # adding 'cancel' as menu option
-        
+        self.set_user_status(user_id=tg_thread_id, state="busy")
         await context.bot.send_message(
             chat_id=update.message.chat_id,
             text = "What type of document would you like to create?",
@@ -96,35 +135,66 @@ class TelegramBot:
         
     async def echo(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         tg_thread_id = update.effective_chat.id
+        if tg_thread_id in self.tg_thread_to_document_mapper:
+            if self.tg_thread_to_document_mapper[tg_thread_id].document_object.is_complete():
+                self.set_user_status(tg_thread_id, "chat")
+                del self.tg_thread_to_document_mapper[tg_thread_id]
+                
+            
         print(f'tg_thread_id: {tg_thread_id}') if BC.VERBOSE else None
         
         # we don't the user to interfere during document creation
         # but allow him to send a cancel command just by writing 'cancel'
+        try:
+            message_text = update.message.text
+        except Exception as e:
+            print("update.message.text is not existing")
+            message_text = ""
+            
         user_status = self.get_user_status(tg_thread_id)
         if user_status == "busy":
             if update.message:
                 message_text = update.message.text
-                if message_text =='cancel':
+                if message_text =='cancel' and tg_thread_id not in self.tg_thread_to_document_mapper:
                     self.set_user_status(tg_thread_id, "chat")
                     return
-            return
+            self.set_user_status(tg_thread_id, "chat")
+            
 
-        # iterate through all document types defined in config.py 
-        # and check if users status equals to any known document type name.
-        # The required module is dynamically imported using importlib
-        # Finally the corresponding document driver method is called using getattr.
-        # Now it is possible to add additional document drivers just by registering it in config.py!!
+        # Iterate through all document types defined in config.py 
+        # and check if users status equals to any known document 
+        # type name as defined in DOCUMENT_TYPES.display_name.
+        #
+        # The required module is dynamically imported using importlib.
+        # Finally a fully implemented document driver class based on 
+        # the DocumentDriverBase interface class is instantiated 
+        # and its fully implemented execute method is called to start 
+        # the process of the document generation.
+        #
+        # The every document object is stored in the tg_thrad_to_document_mapper dictionary.
+        # All its methods and public attributes must be accessed through the dictionary.
+        # This is for thread safety.
+        #
+        # This solution allows to implement and add new document_drivers
+        # like a plug-in.
         for document_type in BC.DOCUMENT_TYPES:
-            if user_status == document_type['display_name']:
+            if self.get_user_status(tg_thread_id) == document_type['display_name']:
                 self.set_user_status(tg_thread_id, "busy")
-                print(f"Process to generate new document of type {user_status} has been triggered.") if BC.VERBOSE else None
+                print(f"Process to generate new document of type {user_status} was triggered.") if BC.VERBOSE else None
                 module_name, class_name = document_type['class_path'].rsplit('.', 1)
                 module = importlib.import_module(module_name)
                 document_driver_class = getattr(module, class_name)
                 new_document = document_driver_class()
-                await getattr(new_document, document_type['method'])(update, context)
-                self.set_user_status(tg_thread_id, "chat")
+                this_document_task = TelegramThread(tg_thread_id=tg_thread_id, document_name=document_type['display_name'], document_object=new_document) # create an ordinary list
+                self.tg_thread_to_document_mapper[this_document_task.tg_thread_id] = this_document_task # add above list as value under the tg_thread_id key
+                # await self.tg_thread_to_document_mapper[tg_thread_id].document_object.execute(update, context, message_text)
+                asyncio.create_task(self.tg_thread_to_document_mapper[tg_thread_id].document_object.execute(update, context, message_text))
                 return
+            
+        if tg_thread_id in self.tg_thread_to_document_mapper:
+            # await self.tg_thread_to_document_mapper[tg_thread_id].document_object.execute(update, context, message_text)
+            asyncio.create_task(self.tg_thread_to_document_mapper[tg_thread_id].document_object.execute(update, context, message_text))
+            return
      
         # I'm keeping the below commmented code to better understand what happens in the loop above.
         # if self.get_user_status(tg_thread_id) == "Academic Lecture":
@@ -217,7 +287,6 @@ class TelegramBot:
             await context.bot.send_message(chat_id=tg_thread_id, text=error_message)
             print(f"Error in processing user request: {e}")
             self.set_user_status(user_id=tg_thread_id, state="chat")
-
 
     # set user status
     def set_user_status(self, user_id, state) -> None:

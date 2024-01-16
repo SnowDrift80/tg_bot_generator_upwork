@@ -8,8 +8,6 @@ OPENAI_CLIENT = OpenAI(api_key=BC.OPENAI_API_KEY)
 
 
 class SharedUtils:
-    
-    
     ## identify language used in the instructions and return language name.
     @staticmethod # we don't need to instantiate this
     async def identify_language(instruction_text):
@@ -49,8 +47,6 @@ class SharedUtils:
     
     
 class DocumentExport():
-    
-    
     def create_word_doc(self, output_file, input_string):
         doc = Document()
     
