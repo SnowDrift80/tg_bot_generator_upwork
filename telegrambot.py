@@ -1,7 +1,7 @@
 import asyncio
 import sys
 import importlib
-from openai import OpenAI, NotFoundError
+from openai import OpenAI, NotFoundError, OpenAIError
 from config import BOT_CONSTANTS as BC
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton # new
 from telegram.ext import (
@@ -23,7 +23,7 @@ import logging
 OPENAI_CLIENT = OpenAI(api_key=BC.OPENAI_API_KEY)
 # dynamic attribute method lookup for logging level based on config.py entry
 log_level = getattr(logging, BC.LOGGING_LEVEL.upper(), None)
-logging.basicConfig(level=log_level)
+logging.basicConfig(level=log_level if BC.VERBOSE else logging.INFO)
 
 
 class TelegramThread:
@@ -82,13 +82,13 @@ class TelegramBot:
                 if thread.document_object.is_complete():
                     threads_to_delete.append(thread_id)
             for thread_id in threads_to_delete:
-                print(f"create_async: removed an inactive task #{thread_id} from dictionary")
+                logging.debug(f"create_async: removed an inactive task #{thread_id} from dictionary")
                 del self.tg_thread_to_document_mapper[thread_id]
         # we want to check if we have reached the maximum of allowed concurrent tasks
         # if BC.CONCURRENCY is 0, then there is no limit to the number of concurrent tasks
         if BC.CONCURRENCY >= 1:
             if len(self.tg_thread_to_document_mapper) >= BC.CONCURRENCY:
-                print("Too many tasks - wait until running tasks finish.")
+                logging.debug("Too many tasks - wait until running tasks finish.")
                 await context.bot.send_message(
                     chat_id=update.effective_chat.id,
                     text=f"<b>Max allowed tasks is {BC.CONCURRENCY}.</b>\nCurrently {len(self.tg_thread_to_document_mapper)} task(s) active.\n\nRequest rejected.",
@@ -141,13 +141,13 @@ class TelegramBot:
                 del self.tg_thread_to_document_mapper[tg_thread_id]
                 
             
-        print(f'tg_thread_id: {tg_thread_id}') if BC.VERBOSE else None
+        logging.debug(f'tg_thread_id: {tg_thread_id}')
         
         # we don't the user to interfere during document creation
         # but allow him to send a cancel command just by writing 'cancel'
         try:
             message_text = update.message.text
-        except Exception as e:
+        except AttributeError as e:
             print("update.message.text is not existing")
             message_text = ""
             
@@ -180,7 +180,7 @@ class TelegramBot:
         for document_type in BC.DOCUMENT_TYPES:
             if self.get_user_status(tg_thread_id) == document_type['display_name']:
                 self.set_user_status(tg_thread_id, "busy")
-                print(f"Process to generate new document of type {user_status} was triggered.") if BC.VERBOSE else None
+                logging.debug(f"Process to generate new document of type {user_status} was triggered.")
                 module_name, class_name = document_type['class_path'].rsplit('.', 1)
                 module = importlib.import_module(module_name)
                 document_driver_class = getattr(module, class_name)
@@ -206,7 +206,7 @@ class TelegramBot:
         if not update.edited_message:
             tg_message_text = update.message.text
         else:
-            print("Editing of message not yet supported") if BC.VERBOSE else None
+            logging.debug("Editing of message not yet supported")
             return
         
         chat = await context.bot.get_chat(tg_thread_id) # get the chat
@@ -217,21 +217,21 @@ class TelegramBot:
         if not update.message.reply_to_message:
         
             if chat_type == 'private':
-                print(f"Received a message in a private chat with user ID: {tg_thread_id}") if BC.VERBOSE else None
+                logging.debug(f"Received a message in a private chat with user ID: {tg_thread_id}")
             elif chat_type in ['group', 'supergroup']:
-                print(f"Received a message in a group '{chat_title}' with ID: {tg_thread_id}") if BC.VERBOSE else None
+                logging.debug(f"Received a message in a group '{chat_title}' with ID: {tg_thread_id}")
             elif chat_type == 'channel':
-                print(f"Received a message in a channel '{chat_title}' with ID: {tg_thread_id}") if BC.VERBOSE else None
+                logging.debug(f"Received a message in a channel '{chat_title}' with ID: {tg_thread_id}")
             else:
-                print(f"Receive a message in an unknown chat type with ID: {tg_thread_id}") if BC.VERBOSE else None
+                logging.debug(f"Receive a message in an unknown chat type with ID: {tg_thread_id}")
 
                 
             if chat_type in ['group', 'supergroup', 'channel'] and not any(call_sign.lower() in tg_message_text.lower() for call_sign in BC.TG_BOT_CALLSIGNS):
-                print('message not addressed to the bot') if BC.VERBOSE else None
+                logging.debug('message not addressed to the bot')
                 return
             
         elif not self.is_bot_msg(update.message.reply_to_message.id):
-            print('reply to message is not addressed at bot') if BC.VERBOSE else None
+            logging.debug('reply to message is not addressed at bot')
             return
             
         try:
@@ -241,7 +241,7 @@ class TelegramBot:
             if oai_thread_id is None:
                 oai_thread = OPENAI_CLIENT.beta.threads.create()
                 oai_thread_id = oai_thread.id
-                print(f"tg_thread_id = {tg_thread_id}") if BC.VERBOSE else None
+                logging.debug(f"tg_thread_id = {tg_thread_id}")
                 self.add_thread(tg_thread_id=tg_thread_id, oai_thread_id=oai_thread_id)
 
             message = OPENAI_CLIENT.beta.threads.messages.create(
@@ -263,7 +263,7 @@ class TelegramBot:
                     thread_id = oai_thread_id,
                     run_id = run.id
                 )
-                print(run.status) if BC.VERBOSE else None
+                logging.debug(run.status)
                 if run.status == "completed":
                     break
                 await asyncio.sleep(5)
@@ -282,7 +282,7 @@ class TelegramBot:
             sent_message_id = sent_message.message_id
             self.add_msg_id(sent_message_id)
                 
-        except Exception as e:
+        except (AttributeError, OpenAIError, IndexError, TypeError, asyncio.CancelledError, Exception) as e:
             error_message = BC.OPENAI_ERROR_MSG
             await context.bot.send_message(chat_id=tg_thread_id, text=error_message)
             print(f"Error in processing user request: {e}")
@@ -318,7 +318,7 @@ class TelegramBot:
     # add thread into the mapper
     def add_thread(self, tg_thread_id, oai_thread_id) -> None:
         if tg_thread_id not in self.oai_tg_id_mapper:
-            print(f"add_thread: tg_thread_id = {tg_thread_id}") if BC.VERBOSE else None
+            logging.debug(f"add_thread: tg_thread_id = {tg_thread_id}")
             self.oai_tg_id_mapper[tg_thread_id] = oai_thread_id
         
         if len(self.oai_tg_id_mapper) > BC.TG_MAX_THREADS: # limit max. length of dict
