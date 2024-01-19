@@ -27,7 +27,7 @@ class BOT_CONSTANTS:
             'name': 'poetry',
             'display_name': 'Poetry',
             'description': 'Compose a poem',
-            'class_path': 'documentdrivers.poetry.PoetryDriver',
+            'class_path': 'documentdrivers.poetry.PoetryDriver', # not implemented
         },
         # Add more types with class_path and method
     ]
@@ -41,3 +41,25 @@ class BOT_CONSTANTS:
     # logging levels:
     # 'CRITICAL', 'ERROR', 'WARNING', 'INFO', 'DEBUG' and 'NOTSET'
     LOGGING_LEVEL = 'ERROR'
+    
+
+    # define the telegram bot commands here
+    # __init__ in TelegramBot class will automatically create the event listeners.
+    # You then just need to implement the event handler methods.
+    # The fields 'short_description' and 'help_text' are translated, hence 
+    # don't forget to add these to the StringLiteral.translations dictionary in locales.py.
+    TG_BOT_COMMANDS = [
+        {
+            'command': 'create',
+            'short_description': 'have a document of your choice created', # don't forget to add the short_description to locales.py translations
+            'help_text': 'Enter \'/create\' in the Telegram command line and post it to activate the document generator.', # translations!!
+            'event_handler': 'botcommand_create_handler_async',
+        },
+        {
+            'command': 'help',
+            'short_description': 'lists available bot commands', # don't forget to add the short_description to locales.py translations
+            'help_text': 'Enter \'/help\' in the Telegram command line and post it to display the help information.', # translations!!
+            'event_handler': 'botcommand_help_handler_async',
+        },
+        # Add more commands
+    ]

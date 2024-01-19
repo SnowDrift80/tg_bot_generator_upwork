@@ -15,6 +15,7 @@ from telegram.ext import (
 
 from config import BOT_CONSTANTS as BC
 from document_driver_base import DocumentDriverBase
+from internationalization.locales import StringLiteral as LOC
 from utils import (SharedUtils, 
                    DocumentExport
 )
@@ -47,14 +48,6 @@ class LectureDriver(DocumentDriverBase):
             sys.exit()
             
             
-        # echo_handler = MessageHandler(
-        # filters.TEXT & (~filters.COMMAND), 
-        # lambda update, context: self.echo(update, context),
-        # )
-        
-        # self.application.add_handler(echo_handler)
-
-
     async def echo(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         tg_thread_id = update.effective_chat.id
         print(f'tg_thread_id: {tg_thread_id}') if BC.VERBOSE else None
@@ -103,7 +96,8 @@ class LectureDriver(DocumentDriverBase):
             )
             
             # wait async for response for OpenAI and check status every 5 seconds
-            tg_main_chapters = "scaffolding document structure... \n\n"
+            user_lang = update.effective_user.language_code
+            tg_main_chapters = LOC.get_translation(user_language=user_lang, translation_key="scaffolding document structure...")
             await context.bot.send_message(chat_id=self.tg_thread_id, text=tg_main_chapters)
             
             while True:
@@ -151,8 +145,6 @@ class LectureDriver(DocumentDriverBase):
         try:
             # iterate through lines and create sub-chapters.
             for line in self.text:
-                # tg_message = f"scuffolding sub structure for '{line}'"
-                # await context.bot.send_message(chat_id=self.tg_thread_id, text=tg_message)
                 if line.strip() == '':
                     continue
                 line = line.lstrip()
@@ -208,8 +200,6 @@ class LectureDriver(DocumentDriverBase):
                     oai_response = oai_response[len(line):]
                 # we create a list containing all the sub-chapter-title strings
                 self.chapter_titles[line] = [line.strip() for line in oai_response.splitlines()]
-                # tg_subchapters = "\n" + oai_response + "\n\n"
-                # await context.bot.send_message(chat_id=self.tg_thread_id, text=tg_subchapters)
 
             # produce string with all chapters sequentually listed for AI reference
             self.all_chapter_titles = ""
@@ -219,12 +209,14 @@ class LectureDriver(DocumentDriverBase):
                     self.all_chapter_titles += sub_chapter.strip() + "\n"
                 
             print(f"The complete scaffold: \n {self.all_chapter_titles}") if BC.VERBOSE else None
-            tg_chapter_overview = "\n<b><u>Suggested document structure:</u></b>\n\n" + self.all_chapter_titles
+            user_lang = update.effective_user.language_code
+            tg_chapter_overview = LOC.get_translation(user_language=user_lang, translation_key="<b><u>Suggested document structure:</u></b>") + self.all_chapter_titles
             await context.bot.send_message(chat_id=self.tg_thread_id, text=tg_chapter_overview, parse_mode='html')
             
             
 
         except Exception as e:
+            self.set_complete()
             print(f"Error while scaffolding sub-chapters: {e}\nExit to chat mode.\n")
         
 
@@ -242,9 +234,13 @@ class LectureDriver(DocumentDriverBase):
             for parent_chapter, sub_chapter_list in self.chapter_titles.items():
                 gen_doc += "\n" + parent_chapter + "\n\n" # add empty line + parent chapter
                 if not tg_parent_chapter_message:
-                    tg_parent_chapter_message = await context.bot.send_message(chat_id=self.tg_thread_id, text=f"\n\nprocessing parent-chapter {parent_chapter}\n\n")
+                    user_lang = update.effective_user.language_code
+                    tg_message = LOC.get_translation(user_language=user_lang, translation_key='processing parent-chapter')
+                    tg_parent_chapter_message = await context.bot.send_message(chat_id=self.tg_thread_id, text=f"{tg_message} {parent_chapter}")
                 else:
-                    await context.bot.edit_message_text(chat_id=self.tg_thread_id, message_id=tg_parent_chapter_message.message_id, text=f"\n\nprocessing parent-chapter {parent_chapter}\n\n")
+                    user_lang = update.effective_user.language_code
+                    tg_message = LOC.get_translation(user_language=user_lang, translation_key='processing parent-chapter')
+                    await context.bot.edit_message_text(chat_id=self.tg_thread_id, message_id=tg_parent_chapter_message.message_id, text=f"{tg_message} {parent_chapter}")
                     
                 for sub_chapter in sub_chapter_list:
                     gen_doc += "\n" + sub_chapter + "\n" # add empty line + parent chapter
@@ -284,12 +280,14 @@ class LectureDriver(DocumentDriverBase):
                             
                         # preparing chevron bold index
                         if not tg_sub_chapter_message: 
-                            message_text = f"\n\nprocessing sub-chapter {sub_chapter[:25]}...{chevron}\n\n"
-                            tg_sub_chapter_message = await context.bot.send_message(chat_id=self.tg_thread_id, text=message_text, parse_mode='markdown')
+                            user_lang = update.effective_user.language_code
+                            message_text = LOC.get_translation(user_language=user_lang, translation_key="processing sub-chapter")
+                            tg_sub_chapter_message = await context.bot.send_message(chat_id=self.tg_thread_id, text=f"{message_text} {sub_chapter[:25]}...{chevron}", parse_mode='markdown')
                         else:
-                            updated_message_text = f"\n\nprocessing sub-chapter {sub_chapter[:25]}...{chevron}\n\n"
+                            user_lang = update.effective_user.language_code
+                            updated_message_text = LOC.get_translation(user_language=user_lang, translation_key="processing sub-chapter")
                             try:
-                                await context.bot.edit_message_text(chat_id=self.tg_thread_id, message_id=tg_sub_chapter_message.message_id, text=updated_message_text, parse_mode='markdown')
+                                await context.bot.edit_message_text(chat_id=self.tg_thread_id, message_id=tg_sub_chapter_message.message_id, text=f"{updated_message_text} {sub_chapter[:25]}...{chevron}", parse_mode='markdown')
                             except Exception as e:
                                 counter += 1
                                 chevron = SharedUtils.shift_chevron(counter)
@@ -323,11 +321,12 @@ class LectureDriver(DocumentDriverBase):
 
             export_document = DocumentExport()
             export_document.create_word_doc("lecture.docx", gen_doc)
+            user_lang = update.effective_user.language_code
             await context.bot.send_document(
                 chat_id=self.tg_thread_id,
                 document=open("lecture.docx", 'rb'),
                 filename="lecture.docx",
-                caption="Here's your Word document!"
+                caption=LOC.get_translation(user_language=user_lang, translation_key="Here's your Word document!")
             )
             self.oai_docgen_thread = None  # hand over to garbage collection
             self.oai_docgen_thread_id = None # hand over to garbage collection
@@ -371,12 +370,12 @@ class LectureDriver(DocumentDriverBase):
 
         if self.process_status == "review and approve":
             context.user_data['review_main_chapters'] = True
+            user_lang = update.effective_user.language_code
             #Convert document types to a list o lists for ReplyKeyboardMarkup
-            keyboard_options = (['approve'], ['cancel'])
-            
+            keyboard_options = ([LOC.get_translation(user_language=user_lang, translation_key='approve')], [LOC.get_translation(user_language=user_lang, translation_key='cancel')])
             await context.bot.send_message(
                 chat_id=update.message.chat_id,
-                text = "<b>Please review main chapters and choose option on how to proceed.</b>",
+                text = LOC.get_translation(user_language=user_lang, translation_key="<b>Please review main chapters and choose option on how to proceed.</b>"),
                 reply_markup=ReplyKeyboardMarkup(keyboard_options, one_time_keyboard=True),
                 parse_mode='html'
             )
@@ -384,11 +383,11 @@ class LectureDriver(DocumentDriverBase):
             return
             
         if self.process_status == "waiting for user choice":
-            if tg_user_message.lower() == "cancel":
+            if LOC.reverse_lookup(target_value=tg_user_message.lower()) == "cancel":
                 self.set_complete()
                 print("process ended") if BC.VERBOSE else None
                 return
-            elif tg_user_message.lower() == "approve":
+            elif LOC.reverse_lookup(target_value=tg_user_message.lower()) == "approve":
                 self.process_status = "generate content"
             
         if self.process_status == "generate content":

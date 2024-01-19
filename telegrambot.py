@@ -14,6 +14,7 @@ from telegram.ext import (
 ) 
 
 from utils import SharedUtils
+from internationalization.locales import StringLiteral as LOC
 from document_driver_base import DocumentDriverBase
 import logging
 
@@ -49,33 +50,71 @@ class TelegramBot:
             sys.exit()
             
         self.application = ApplicationBuilder().token(BC.TG_BOT_TOKEN).build()
-        
-        create_handler = CommandHandler(
-            'create', self.create_async
-            )
-        
+
+        # Iterates through command definition in config.py TG_BOT_COMMANDS dictionary.
+        # Creates all telegram bot command listeners as defined.
+        # Don't forget to implement the event handler methods if you add new commands.
+        try:
+            for command_data in BC.TG_BOT_COMMANDS:
+                command = command_data['command']
+                event_handler_method = getattr(self, command_data['event_handler'])
+                command_handler = CommandHandler(command, event_handler_method)
+                self.application.add_handler(command_handler)
+        except (AttributeError, TypeError) as e:
+            logging.error(f"event handler method '{command_data['event_handler']} for command {command} not implemented: {e}.\n\n Telegram bot may not work as expected!\n\n")
+
+
+        # Adds echo listener which enables the chat functionality.        
+        # This is the main funnel for all communication with the bot.
         echo_handler = MessageHandler(
             filters.TEXT & (~filters.COMMAND), 
             lambda update, context: self.echo_async(update, context),
             )
         
-        for document_type in BC.DOCUMENT_TYPES:
-            document_name = document_type['display_name']
-            document_class_path = document_type['class_path']
-            
+        
+        # create list of all bot commands in all languages
+        # reason: Telegram Custom Keyboard returns the display_name of the key,
+        # which is pretty stupid
+        all_documents_types = []
+        for doctype in BC.DOCUMENT_TYPES:
+            for translations in LOC.translations.values():
+                translation = translations.get(doctype['display_name'])
+                if translation is not None:
+                    command = translation
+                    all_documents_types.append(command)
+                    
+        
+        for document_type in all_documents_types:
+            print(document_type)
             handler = MessageHandler(
-                filters.Regex(fr'^{document_name}$'),
-                lambda update, context, doc_name=document_name: self.handle_instructions(update, context, doc_name)
+                filters.Regex(fr'^{document_type}$'),
+                lambda update, context, doc_name=document_type: self.handle_instructions(update, context, doc_name)
                 )
     
             self.application.add_handler(handler)  
-
-        
-        self.application.add_handler(create_handler)
+            
+            
         self.application.add_handler(echo_handler)
 
+
+    # simple handler method for /help bot command listing all available commands as defined in config.py TG_BOT_COMMANDS
+    async def botcommand_help_handler_async(self, update: Update, context: CallbackContext):
+        user_lang = update.effective_user.language_code
+        tg_message = ""
+        for command_data in BC.TG_BOT_COMMANDS:
+            command = f"/{command_data['command']}"
+            short_description = LOC.get_translation(user_language=user_lang, translation_key=command_data['short_description'])
+            help_text = LOC.get_translation(user_language=user_lang, translation_key=command_data ['help_text'])
+            tg_message = tg_message + f"<u><b>{command}</b></u>\n{short_description}\n<i>{help_text}</i>\n\n"
+        await context.bot.send_message(
+                chat_id=update.effective_chat.id,
+                text=f"{tg_message}",
+                parse_mode='html'
+            )
+            
+        
     # asynchronous function wrapper for create() method (command: /create)    
-    async def create_async(self, update: Update, context: CallbackContext):
+    async def botcommand_create_handler_async(self, update: Update, context: CallbackContext):
         if len(self.tg_thread_to_document_mapper) > 0:
             threads_to_delete = []
             for thread_id, thread in self.tg_thread_to_document_mapper.items():
@@ -89,9 +128,12 @@ class TelegramBot:
         if BC.CONCURRENCY >= 1:
             if len(self.tg_thread_to_document_mapper) >= BC.CONCURRENCY:
                 logging.debug("Too many tasks - wait until running tasks finish.")
+                user_lang = update.effective_user.language_code
+                translated_text = LOC.get_translation(user_language=user_lang, translation_key="<b>Max allowed tasks is.</b>\nCurrently task(s) active.\n\nRequest rejected.")
+                
                 await context.bot.send_message(
                     chat_id=update.effective_chat.id,
-                    text=f"<b>Max allowed tasks is {BC.CONCURRENCY}.</b>\nCurrently {len(self.tg_thread_to_document_mapper)} task(s) active.\n\nRequest rejected.",
+                    text=f"{translated_text}",
                     parse_mode='html'
                 )
                 return
@@ -107,11 +149,18 @@ class TelegramBot:
     # user decided to enter instructions. user_status flag is set to 'instructions'
     # next user input will be handled by the echo function
     async def handle_instructions(self, update: Update, context: CallbackContext, document_name):
+        user_lang = update.effective_user.language_code
         await context.bot.send_message(
             chat_id=update.effective_chat.id,
-            text="Please enter your instructions:"
+            text=LOC.get_translation(user_language=user_lang, translation_key="Please enter your instructions:")
         )
-        self.set_user_status(update.effective_chat.id, document_name)
+        # We assign the user status based on the document type selected by the Telegram user.
+        # However, as telegram uses display text, the document name can be translated unfortunately.
+        # But method echo() is "listening" for document type names in base language (en).
+        # Hence we need to reverse lookup the document type name to get the original name 
+        # in base language (en).
+        base_lang_document_name = LOC.reverse_lookup(target_value=document_name)
+        self.set_user_status(update.effective_chat.id, base_lang_document_name)
 
     
         
@@ -121,18 +170,28 @@ class TelegramBot:
         tg_thread_id = update.effective_chat.id
         document_types = BC.DOCUMENT_TYPES
         
+        #get telegram user langage
+        user_lang = update.effective_user.language_code
+        print("Telegram user language ISO Code: ", user_lang)
+        
         #Convert document types from config.py to a list o lists for ReplyKeyboardMarkup
-        keyboard_options = [[doc['display_name']] for doc in document_types]
-        keyboard_options.append(['cancel']) # adding 'cancel' as menu option
+        keyboard_options = [
+            [LOC.get_translation(user_language=user_lang, translation_key=doc['display_name'])]
+            for doc in BC.DOCUMENT_TYPES
+        ]
+        
+        keyboard_options.append([LOC.get_translation(user_language=user_lang, translation_key='cancel')]) # adding 'cancel' as menu option
         self.set_user_status(user_id=tg_thread_id, state="busy")
+        text = LOC.get_translation(user_language=user_lang, translation_key="What type of document would you like to create?")
         await context.bot.send_message(
             chat_id=update.message.chat_id,
-            text = "What type of document would you like to create?",
+            text = LOC.get_translation(user_language=user_lang, translation_key="What type of document would you like to create?"),
             reply_markup=ReplyKeyboardMarkup(keyboard_options, one_time_keyboard=True),
             parse_mode='html'
         )
         
-        
+
+    # method that is called after user posted a message in normal chat mode.        
     async def echo(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         tg_thread_id = update.effective_chat.id
         if tg_thread_id in self.tg_thread_to_document_mapper:
@@ -143,7 +202,7 @@ class TelegramBot:
             
         logging.debug(f'tg_thread_id: {tg_thread_id}')
         
-        # we don't the user to interfere during document creation
+        # we don't want the user to interfere during document creation
         # but allow him to send a cancel command just by writing 'cancel'
         try:
             message_text = update.message.text
@@ -178,6 +237,7 @@ class TelegramBot:
         # This solution allows to implement and add new document_drivers
         # like a plug-in.
         for document_type in BC.DOCUMENT_TYPES:
+            print(f"check document type: {self.get_user_status(tg_thread_id)} = {document_type['display_name']}")
             if self.get_user_status(tg_thread_id) == document_type['display_name']:
                 self.set_user_status(tg_thread_id, "busy")
                 logging.debug(f"Process to generate new document of type {user_status} was triggered.")
@@ -196,12 +256,6 @@ class TelegramBot:
             asyncio.create_task(self.tg_thread_to_document_mapper[tg_thread_id].document_object.execute(update, context, message_text))
             return
      
-        # I'm keeping the below commmented code to better understand what happens in the loop above.
-        # if self.get_user_status(tg_thread_id) == "Academic Lecture":
-        #     print("OK - now we will create the scaffold for the topic") if BC.VERBOSE else None
-        #     new_document = LectureDriver()
-        #     await new_document.create_lecture(update, context)
-        #     return
             
         if not update.edited_message:
             tg_message_text = update.message.text
@@ -297,7 +351,6 @@ class TelegramBot:
         try:
             return self.user_state[user_id]
         except KeyError as e:
-            print(f"unknown key, {e}")
             return ''
 
 
